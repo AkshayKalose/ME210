@@ -1,6 +1,7 @@
 #include "Arduino.h"
 #include <Metro.h>
 #include "NewPing.h"
+#include "AccelStepper.h"
 
 // Driving Motors
 const int enablePinLeft = 8;
@@ -11,39 +12,63 @@ const int directionPinRight = 4;
 // Tape Sensors
 const int leftIRpin = 14;
 const int rightIRpin = 15;
-const int edgeIRPin = 16;  //currently on right side of Mayuri
+const int edgeIRPin = 16;
 
 // Ultrasonic Sensor
 const int triggerPin = 7;
 const int echoPin = 12;
 
+// Ball Servo
+const int stepPin = 6;
+const int directionPin = 5;
+
+// Flywheel
+const int flywheelPin = 2;
+
 Metro timerOne(1000);
 Metro timerTwo(1000);
 
+AccelStepper stepper(1, stepPin, directionPin);
+
 typedef enum {
-  INIT, TO_ARMOURY, TURN_TO_BUTTON, PUSH_BUTTON, RELOAD, BEFORE_TO_KINGS_LANDING, TO_KINGS_LANDING,
+  INIT, TO_ARMOURY, TURN_TO_BUTTON, PUSH_BUTTON, RELOAD, BEFORE_TO_KINGS_LANDING, TO_KINGS_LANDING, FACE_KINGS_LANDING, SHOOT_KINGS_LANDING
 } State_t;
 
 typedef enum {
   BOTH_ON, LEFT_OFF, RIGHT_OFF, BOTH_OFF, // KINGS_LAND, FIYAH
 } LineFollowingState_t;
 
+typedef enum {
+  NONDECREASING, NONINCREASING, MINIMIZING
+} WallMinimizingState_t;
+
 State_t state;
 LineFollowingState_t lineFollowingState;
+WallMinimizingState_t wallMinimizingState;
+
 uint16_t leftThresh; //TODO: Are all the thresholds going to be different?
 uint16_t rightThresh;
 uint16_t kingsThresh; // TODO: Implement hysteresis
 
-bool kingsLandingDone = false;
-
 #define MAX_DISTANCE 200
-
 NewPing sonar(triggerPin, echoPin, MAX_DISTANCE);
 
+int minimumDistance = MAX_DISTANCE;
+int maximumDistance = 0;
+
+bool kingsLandingDone = false;
+
 bool lineFollowing = false;
+bool minimizingWall = false;
+bool edgeOffLine = false;
+
+int currentDirectionLeft;
+int currentDirectionRight;
 
 void setDrivingMotors(int enableLeft, int enableRight, int directionLeft, int directionRight) {
   // TODO: allow input of -100 -> 100 and set direction automatically.
+  currentDirectionLeft = directionLeft;
+  currentDirectionRight = directionRight;
   analogWrite(enablePinLeft, enableLeft);
   analogWrite(enablePinRight, enableRight);
   digitalWrite(directionPinLeft, directionLeft);
@@ -59,14 +84,20 @@ void setup() {
   pinMode(directionPinLeft, OUTPUT);
   pinMode(enablePinRight, OUTPUT);
   pinMode(directionPinRight, OUTPUT);
-
+  pinMode(stepPin, OUTPUT);
+  pinMode(directionPin, OUTPUT);
+  pinMode(flywheelPin, OUTPUT);
 
   Serial.begin(9600);
-  while (!Serial);
+  // while (!Serial);
 
   // Initial State
+  // state = TO_KINGS_LANDING;
+  // lineFollowing = true; // DISABLE WHEN CHANGING BACK TO INIT
+
   state = INIT;
-  // setDrivingMotors(255, 255, LOW, LOW);
+
+  setDrivingMotors(255, 255, LOW, LOW);
   kingsLandingDone = false;
 
   // Calculate Thresholds
@@ -150,24 +181,75 @@ void executeLineFollowing() {
   }
 }
 
+void executeWallMinimization() {
+  int distance = (int) sonar.ping_cm();
+  Serial.println(distance);
+  if (distance == 0) {
+    return; // Not a valid reading.
+  }
+  switch (wallMinimizingState) {
+    case NONDECREASING:
+      if (distance > maximumDistance) {
+        maximumDistance = distance;
+      } else {
+        // Current Distance <= Maximum Distance
+        if (abs(maximumDistance - distance) >= 3) {
+          // Sensor Threshold Exceeded
+          // Wall Distance Has Switched From Increasing to Decreasing
+          wallMinimizingState = NONINCREASING;
+          minimumDistance = distance;
+          Serial.println("\tNonincreasing");
+        }
+      }
+      break;
+    case NONINCREASING:
+      if (distance < minimumDistance) {
+        minimumDistance = distance;
+      } else {
+        // Current Distance >= Minimum Distance
+        if (abs(minimumDistance - distance) >= 3) {
+          // Sensor Threshold Exceeded
+          // Wall Distance is Increasing For Sure
+          wallMinimizingState = MINIMIZING;
+          setDrivingMotors(255, 255, 1 - currentDirectionLeft, 1 - currentDirectionRight);
+          Serial.println("\tMinimizing");
+        }
+      }
+      break;
+    case MINIMIZING:
+        if (abs(distance - minimumDistance) <= 1) {
+          setDrivingMotors(0, 0, LOW, LOW);
+          minimizingWall = false;
+          Serial.println("\tDone Minimizing");
+        }
+      break;
+    default:
+      break;
+  }
+  delay(100);
+}
+
 void loop() {
   if (lineFollowing) {
     executeLineFollowing();
   }
+  if (minimizingWall) {
+    executeWallMinimization();
+  }
   switch (state) {
     case INIT:
-      // if (!leftOff() && !rightOff()) {
-      //   state = TO_ARMOURY;
-      //   lineFollowingState = BOTH_ON;
-      //   lineFollowing = true;
-      //   Serial.println("Moving to armoury");
-      // }
-      {
-        unsigned long distance = sonar.ping_cm();
-        Serial.println(distance);
-        // Serial.println(analogRead(edgeIRPin));
-        delay(100);
+      if (!leftOff() && !rightOff()) {
+        state = TO_ARMOURY;
+        lineFollowingState = BOTH_ON;
+        lineFollowing = true;
+        Serial.println("Moving to armoury");
       }
+      // {
+      //   unsigned long distance = sonar.ping_cm();
+      //   Serial.println(distance);
+      //   // Serial.println(analogRead(edgeIRPin));
+      //   delay(100);
+      // }
       break;
     case TO_ARMOURY:
       {
@@ -177,8 +259,12 @@ void loop() {
           state = TURN_TO_BUTTON;
           lineFollowing = false;
           setDrivingMotors(255, 255, LOW, HIGH);
-          delay(300); // wait until sonar returns 0
-          Serial.println("Turning to button");
+          wallMinimizingState = NONDECREASING;
+          minimumDistance = MAX_DISTANCE;
+          maximumDistance = 0;
+          minimizingWall = true;
+          // delay(300);
+          Serial.println("Turning to button / Start Minimizing");
         } else {
           delay(100); // Don't immediately trigger sonar again.
         }
@@ -186,14 +272,19 @@ void loop() {
       break;
     case TURN_TO_BUTTON:
       {
-        unsigned long distance = sonar.ping_cm();
-        Serial.println(distance);
-        if (distance > 0 && distance < 15) {
+        // unsigned long distance = sonar.ping_cm();
+        // Serial.println(distance);
+        // if (distance > 0 && distance < 15) {
+        //   state = PUSH_BUTTON;
+        //   setDrivingMotors(255, 255, LOW, LOW);
+        //   Serial.println("Pushing button");
+        // } else {
+        //   delay(100); // Don't immediately trigger sonar again.
+        // }
+        if (!minimizingWall) {
           state = PUSH_BUTTON;
           setDrivingMotors(255, 255, LOW, LOW);
           Serial.println("Pushing button");
-        } else {
-          delay(100); // Don't immediately trigger sonar again.
         }
       }
       break;
@@ -218,9 +309,9 @@ void loop() {
         Serial.println("Before Kings Landing");
         state = BEFORE_TO_KINGS_LANDING;
         setDrivingMotors(255, 255, HIGH, HIGH);
-        delay(3000);
+        delay(2000);
         setDrivingMotors(255, 255, LOW, HIGH);
-        delay(2500);
+        delay(1500);
         setDrivingMotors(255, 255, LOW, LOW);
       }
       break;
@@ -243,10 +334,59 @@ void loop() {
       break;
     case TO_KINGS_LANDING:
       if (checkKing()) {
+        state = FACE_KINGS_LANDING;
         lineFollowing = false;
-        setDrivingMotors(0, 0, LOW, LOW);
+        // CODE TO MINIMIZE WALL
+        // setDrivingMotors(255, 255, LOW, LOW);
+        // delay(500);
+        // setDrivingMotors(255, 255, HIGH, LOW);
+        // delay(1000);
+        // wallMinimizingState = NONDECREASING;
+        // minimumDistance = MAX_DISTANCE;
+        // maximumDistance = 0;
+        // minimizingWall = true;
+
+        // CODE TO TURN WITH EDGE PIN
+        setDrivingMotors(255, 255, HIGH, LOW);
+        delay(500);
+        // edgeOffLine = false;
+        edgeOffLine = true;
+        Serial.println("Face Kings Landing");
+        Serial.println(edgeOffLine);
       }
-      // TODO: Not fully implemented from here.
+      break;
+    case FACE_KINGS_LANDING:
+      // CODE TO MINIMIZE WALL
+      // if (!minimizingWall) {
+      // CODE TO TURN WITH EDGE PIN
+      Serial.println(edgeOffLine);
+      Serial.print(analogRead(edgeIRPin));
+      Serial.print(" ");
+      Serial.print(kingsThresh);
+      Serial.print(" ");
+      Serial.println(checkKing());
+
+      if (!edgeOffLine) {
+        if (!checkKing()) {
+          edgeOffLine = true;
+        }
+      }
+      if (edgeOffLine && checkKing()) {
+        state = SHOOT_KINGS_LANDING;
+        setDrivingMotors(0, 0, LOW, LOW);
+        digitalWrite(flywheelPin, HIGH);
+        delay(1000);
+        stepper.setMaxSpeed(1);
+        stepper.move(-360);
+        Serial.println("Shoot Kings Landing");
+      }
+      break;
+    case SHOOT_KINGS_LANDING:
+      if (stepper.distanceToGo() == 0) {
+        digitalWrite(flywheelPin, LOW);
+      } else {
+        stepper.run();
+      }
       break;
     default:
       Serial.println("Not implemented.");
