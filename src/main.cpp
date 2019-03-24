@@ -10,8 +10,8 @@ const int enablePinRight = 8;
 const int directionPinRight = 9;
 
 // Tape Sensors
-const int leftIRpin = 14;
-const int rightIRpin = 16;
+const int leftIRPin = 14;
+const int rightIRPin = 16;
 const int edgeIRPin = 15;
 
 // Ultrasonic Sensor
@@ -30,7 +30,6 @@ const int IRPin = 22;
 
 Metro timerOne(1000);
 Metro gameTimer(130000);
-//Metro sonarTimer(100);
 
 IntervalTimer calculateFrequencyTimer;
 
@@ -39,29 +38,23 @@ int frequency = 0;
 
 const int redFrequency = 1150;
 const int blueFrequency = 1955;
-const int attackFrequency = blueFrequency;
 
 AccelStepper stepper(1, stepPin, directionPin);
 
 typedef enum {
-  INIT, TO_ARMOURY, TURN_TO_BUTTON, PUSH_BUTTON, RELOAD, STOP_BEFORE_TO_WINTERFELL, BEFORE_TO_WINTERFELL, TO_WINTERFELL, APPROACH_WINTERFELL, FACE_WINTERFELL, SHOOT_WINTERFELL, FACE_CASTERLY_ROCK, SHOOT_CASTERLY_ROCK, FIND_LINE_TO_ARMOURY, BEFORE_TO_KINGS_LANDING, TO_KINGS_LANDING, FACE_KINGS_LANDING, SHOOT_KINGS_LANDING, TO_SHOOT_DRAGONSTONE, FACE_DRAGONSTONE, SHOOT_DRAGONSTONE, END_GAME
+  INIT, TO_ARMOURY, TURN_TO_BUTTON, PUSH_BUTTON, RELOAD, STOP_BEFORE_TO_WINTERFELL, BEFORE_TO_WINTERFELL, TO_WINTERFELL, APPROACH_WINTERFELL, FACE_WINTERFELL, SHOOT_WINTERFELL, FACE_CASTERLY_ROCK, SHOOT_CASTERLY_ROCK, FIND_LINE_TO_ARMOURY, BEFORE_TO_KINGS_LANDING, TO_KINGS_LANDING, FACE_KINGS_LANDING, SHOOT_KINGS_LANDING, END_GAME
 } State_t;
 
 typedef enum {
   BOTH_ON, LEFT_OFF, RIGHT_OFF, BOTH_OFF,
 } LineFollowingState_t;
 
-typedef enum {
-  NONDECREASING, NONINCREASING, MINIMIZING
-} WallMinimizingState_t;
-
 State_t state;
 LineFollowingState_t lineFollowingState;
-WallMinimizingState_t wallMinimizingState;
 
-uint16_t leftThresh; //TODO: Are all the thresholds going to be different?
+uint16_t leftThresh;
 uint16_t rightThresh;
-uint16_t edgeThresh; // TODO: Implement hysteresis
+uint16_t edgeThresh;
 
 uint16_t previousEdgeValues[2];
 
@@ -74,16 +67,13 @@ int maximumDistance = 0;
 bool winterfellDone = false;
 bool casterlyRockDone = false;
 bool kingsLandingDone = false;
-bool dragonstoneDone = false;
 
 bool lineFollowing = false;
-bool minimizingWall = false;
 
 int currentDirectionLeft;
 int currentDirectionRight;
 
 void setDrivingMotors(int enableLeft, int enableRight, int directionLeft, int directionRight) {
-  // TODO: allow input of -100 -> 100 and set direction automatically.
   currentDirectionLeft = directionLeft;
   currentDirectionRight = directionRight;
   analogWrite(enablePinLeft, enableLeft);
@@ -93,8 +83,8 @@ void setDrivingMotors(int enableLeft, int enableRight, int directionLeft, int di
 }
 
 void setup() {
-  pinMode(leftIRpin, INPUT);
-  pinMode(rightIRpin, INPUT);
+  pinMode(leftIRPin, INPUT);
+  pinMode(rightIRPin, INPUT);
   pinMode(edgeIRPin, INPUT);
   pinMode(IRPin, INPUT);
 
@@ -111,25 +101,26 @@ void setup() {
 
   // Initial State
   state = INIT;
-
   setDrivingMotors(255, 255, LOW, LOW);
 
   // Calculate Thresholds
   uint16_t thresholdOffset = 100;
-  leftThresh = (analogRead(leftIRpin) + analogRead(leftIRpin) +
-          analogRead(leftIRpin))/3 + thresholdOffset; //starts as black
-  Serial.print("leftThresh: ");
-  Serial.println(leftThresh);
-  rightThresh = (analogRead(rightIRpin)+analogRead(rightIRpin)+
-          analogRead(rightIRpin))/3 + thresholdOffset;  //starts as black
-  Serial.print("rightThresh: ");
-  Serial.println(rightThresh);
-  edgeThresh = (analogRead(edgeIRPin) + analogRead(edgeIRPin) +
-          analogRead(edgeIRPin))/3 - thresholdOffset;  //starts as white
-  Serial.print("edgeThresh: ");
-  Serial.println(edgeThresh);
+  leftThresh = (analogRead(leftIRPin) + analogRead(leftIRPin) +
+    analogRead(leftIRPin)) / 3 + thresholdOffset; // Starts as black
+  Serial.print("leftThresh: "); Serial.println(leftThresh);
 
+  rightThresh = (analogRead(rightIRPin) + analogRead(rightIRPin) +
+    analogRead(rightIRPin)) / 3 + thresholdOffset;  // Starts as black
+  Serial.print("rightThresh: "); Serial.println(rightThresh);
+
+  edgeThresh = (analogRead(edgeIRPin) + analogRead(edgeIRPin) +
+    analogRead(edgeIRPin)) / 3 - thresholdOffset;  // Starts as white
+  Serial.print("edgeThresh: "); Serial.println(edgeThresh);
+
+  // Start Moving Average for Edge Tape Sensor
   previousEdgeValues[0] = previousEdgeValues[1] = edgeThresh + thresholdOffset;
+
+  // Start 2:10 Game Timer
   gameTimer.reset();
 }
 
@@ -142,16 +133,15 @@ void calculateFrequency() {
   counter = 0;
 }
 
-// TODO: Hysteresis
 bool leftOff() {
-  return analogRead(leftIRpin) > leftThresh;
+  return analogRead(leftIRPin) > leftThresh;
 }
 
 bool rightOff() {
-  return analogRead(rightIRpin) > rightThresh;
+  return analogRead(rightIRPin) > rightThresh;
 }
 
-bool checkKing() {
+bool checkEdge() {
   uint16_t currentValue = analogRead(edgeIRPin);
   uint16_t edgeAverage = (currentValue + previousEdgeValues[0] + previousEdgeValues[1]) / 3;
   previousEdgeValues[0] = previousEdgeValues[1];
@@ -162,7 +152,6 @@ bool checkKing() {
 void executeLineFollowing() {
   switch (lineFollowingState) {
     case BOTH_ON:
-    // Serial.println("Both on");
       if (leftOff()) {
         lineFollowingState = LEFT_OFF;
         Serial.println("Left off");
@@ -206,57 +195,9 @@ void executeLineFollowing() {
         setDrivingMotors(100, 255, LOW, LOW);
       }
       break;
-    default: // Should never get into an unhandled lineFollowingState
+    default:
       Serial.println("What is this I do not even...");
   }
-}
-
-void executeWallMinimization() {
-  int distance = (int) sonar.ping_cm();
-  Serial.println(distance);
-  if (distance == 0) {
-    return; // Not a valid reading.
-  }
-  switch (wallMinimizingState) {
-    case NONDECREASING:
-      if (distance > maximumDistance) {
-        maximumDistance = distance;
-      } else {
-        // Current Distance <= Maximum Distance
-        if (abs(maximumDistance - distance) >= 3) {
-          // Sensor Threshold Exceeded
-          // Wall Distance Has Switched From Increasing to Decreasing
-          wallMinimizingState = NONINCREASING;
-          minimumDistance = distance;
-          Serial.println("\tNonincreasing");
-        }
-      }
-      break;
-    case NONINCREASING:
-      if (distance < minimumDistance) {
-        minimumDistance = distance;
-      } else {
-        // Current Distance >= Minimum Distance
-        if (abs(minimumDistance - distance) >= 3) {
-          // Sensor Threshold Exceeded
-          // Wall Distance is Increasing For Sure
-          wallMinimizingState = MINIMIZING;
-          setDrivingMotors(255, 255, 1 - currentDirectionLeft, 1 - currentDirectionRight);
-          Serial.println("\tMinimizing");
-        }
-      }
-      break;
-    case MINIMIZING:
-        if (abs(distance - minimumDistance) <= 1) {
-          setDrivingMotors(0, 0, LOW, LOW);
-          minimizingWall = false;
-          Serial.println("\tDone Minimizing");
-        }
-      break;
-    default:
-      break;
-  }
-  delay(100);
 }
 
 void loop() {
@@ -270,9 +211,6 @@ void loop() {
   if (lineFollowing) {
     executeLineFollowing();
   }
-  if (minimizingWall) {
-    executeWallMinimization();
-  }
   switch (state) {
     case INIT:
       if (!leftOff() && !rightOff()) {
@@ -281,19 +219,6 @@ void loop() {
         lineFollowing = true;
         Serial.println("Moving to armoury");
       }
-      // {
-      //   // unsigned long distance = sonar.ping_cm();
-      //   Serial.println(analogRead(IRPin));
-      //   // Serial.println(distance);
-      //   // Serial.println(analogRead(edgeIRPin));
-      //   delay(100);
-      // }
-      // {
-      //   state = FACE_WINTERFELL;
-      //   calculateFrequencyTimer.begin(calculateFrequency, 100000);
-      //   attachInterrupt(digitalPinToInterrupt(IRPin), countFallingEdges, FALLING);
-      //   Serial.println("Face Winterfell");
-      // }
       break;
     case TO_ARMOURY:
       {
@@ -311,7 +236,7 @@ void loop() {
       break;
     case TURN_TO_BUTTON:
       {
-        if (checkKing()) {
+        if (checkEdge()) {
           state = PUSH_BUTTON;
           setDrivingMotors(255, 255, LOW, LOW);
           Serial.println("Pushing button");
@@ -325,7 +250,7 @@ void loop() {
         if (distance > 0 && distance < 5) {
           Serial.println("Reloading");
           state = RELOAD;
-          delay(1000); // Make sure we hit the button. TODO: Use limit sensor.
+          delay(1000); // Make sure we hit the button.
           setDrivingMotors(0, 0, LOW, LOW);
           timerOne.interval(1000);
           timerOne.reset();
@@ -340,7 +265,7 @@ void loop() {
           Serial.println("Stop Before Winterfell");
           state = STOP_BEFORE_TO_WINTERFELL;
           setDrivingMotors(255, 255, HIGH, HIGH);
-        } else if (!kingsLandingDone) { //&& !dragonstoneDone) {
+        } else if (!kingsLandingDone) {
           Serial.println("Before Kings Landing");
           state = BEFORE_TO_KINGS_LANDING;
           setDrivingMotors(255, 255, HIGH, HIGH);
@@ -349,8 +274,8 @@ void loop() {
           delay(1500);
           setDrivingMotors(255, 255, LOW, LOW);
         } else {
-          // TODO: Figure out what to do here.
-          winterfellDone = casterlyRockDone = kingsLandingDone = dragonstoneDone = false;
+          // Restart loop; go to shoot down Winterfell.
+          winterfellDone = casterlyRockDone = kingsLandingDone = false;
           Serial.println("Stop Before Winterfell");
           state = STOP_BEFORE_TO_WINTERFELL;
           setDrivingMotors(255, 255, HIGH, HIGH);
@@ -358,7 +283,7 @@ void loop() {
       }
       break;
     case STOP_BEFORE_TO_WINTERFELL:
-      if (checkKing()) {
+      if (checkEdge()) {
         Serial.println("Before To Winterfell");
         state = BEFORE_TO_WINTERFELL;
         setDrivingMotors(255, 255, LOW, HIGH);
@@ -420,7 +345,7 @@ void loop() {
         digitalWrite(flywheelPin, HIGH);
         delay(1000);
         stepper.setMaxSpeed(2);
-        stepper.move(-16); // TODO: Determine Distance To Shoot Two Balls
+        stepper.move(-16);
         Serial.println("Shoot Winterfell");
       }
       if (!leftOff()) {
@@ -435,7 +360,7 @@ void loop() {
       break;
     case SHOOT_WINTERFELL:
       if (stepper.distanceToGo() == 0) {
-        delay(500); // Wait for ball to shoot.
+        delay(500); // Wait for current ball to shoot.
         state = FACE_CASTERLY_ROCK;
         setDrivingMotors(150, 150, LOW, HIGH);
         delay(200);
@@ -458,7 +383,7 @@ void loop() {
         state = FIND_LINE_TO_ARMOURY;
         digitalWrite(flywheelPin, LOW);
         setDrivingMotors(255, 255, LOW, HIGH);
-        delay(2000);
+        delay(2000); // Turn back to armoury.
         setDrivingMotors(255, 255, LOW, LOW);
         casterlyRockDone = true;
         Serial.println("Find line to Armoury");
@@ -501,89 +426,35 @@ void loop() {
       }
       break;
     case TO_KINGS_LANDING:
-      if (checkKing()) {
+      if (checkEdge()) {
         state = FACE_KINGS_LANDING;
         lineFollowing = false;
         setDrivingMotors(255, 255, HIGH, LOW);
-        delay(500); // TODO: IDEA: create a variable called previousValue which is either high or low, and then trigger the transition only when previous is low and current is high.
+        delay(500); // Get edge tape sensor off the line.
         Serial.println("Face Kings Landing");
       }
       break;
     case FACE_KINGS_LANDING:
-      Serial.print(analogRead(edgeIRPin));
-      Serial.print(" ");
-      Serial.print(edgeThresh);
-      Serial.print(" ");
-      Serial.println(checkKing());
-
-      if (checkKing()) {
+      if (checkEdge()) {
         state = SHOOT_KINGS_LANDING;
         setDrivingMotors(255, 255, LOW, HIGH);
-        delay(100);
+        delay(100); // Turn slightly right to adjust for offset.
         setDrivingMotors(0, 0, LOW, LOW);
         digitalWrite(flywheelPin, HIGH);
         delay(1000);
         stepper.setMaxSpeed(2);
-        stepper.move(-16); // TODO: Determine Distance To Shoot Two Balls
+        stepper.move(-16);
         Serial.println("Shoot Kings Landing");
       }
       break;
     case SHOOT_KINGS_LANDING:
       if (stepper.distanceToGo() == 0) {
-        // state = FACE_DRAGONSTONE;
-        // // digitalWrite(flywheelPin, LOW);
-        // setDrivingMotors(150, 150, LOW, HIGH);
-        // stepper.setMaxSpeed(2);
-        // stepper.move(-24);
-        // // delay(500); // TODO: IDEA: create a variable called previousValue which is either high or low, and then trigger the transition only when previous is low and current is high.
-        // calculateFrequencyTimer.begin(calculateFrequency, 100000);
-        // attachInterrupt(digitalPinToInterrupt(IRPin), countFallingEdges, FALLING);
-        // Serial.println("Face Dragonstone");
         state = FIND_LINE_TO_ARMOURY;
-        Serial.println("Find line to Armoury");
         setDrivingMotors(255, 255, HIGH, LOW);
         digitalWrite(flywheelPin, LOW);
         delay(500);
         kingsLandingDone = true;
-      } else {
-        stepper.run();
-      }
-      break;
-    // case TO_SHOOT_DRAGONSTONE:
-    //   {
-    //     unsigned long distance = sonar.ping_cm();
-    //     Serial.println(distance);
-    //     if (distance > 0 && distance < 15) {
-    //       state = FACE_DRAGONSTONE;
-    //       setDrivingMotors(255, 255, HIGH, LOW);
-    //       calculateFrequencyTimer.begin(calculateFrequency, 100000);
-    //       attachInterrupt(digitalPinToInterrupt(IRPin), countFallingEdges, FALLING);
-    //       Serial.println("Face Dragonstone");
-    //     } else {
-    //       delay(100);
-    //     }
-    //   }
-      // break;
-    case FACE_DRAGONSTONE:
-      {
-        if ((redFrequency - 200 < frequency && frequency < redFrequency + 200)
-            || (blueFrequency - 200 < frequency && frequency < blueFrequency + 200)) {
-          state = SHOOT_DRAGONSTONE;
-          calculateFrequencyTimer.end();
-          detachInterrupt(digitalPinToInterrupt(IRPin));
-          setDrivingMotors(0, 0, LOW, LOW);
-          // digitalWrite(flywheelPin, HIGH);
-          // delay(1000);
-          stepper.setMaxSpeed(2);
-          stepper.move(-24);
-          Serial.println("Shoot Dragonstone");
-        }
-        stepper.run();
-      }
-      break;
-    case SHOOT_DRAGONSTONE:
-      if (stepper.distanceToGo() == 0) {
-        digitalWrite(flywheelPin, LOW);
+        Serial.println("Find line to Armoury");
       } else {
         stepper.run();
       }
